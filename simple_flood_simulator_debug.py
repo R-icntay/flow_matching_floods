@@ -286,7 +286,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[6]:
+# In[4]:
 
 
 # Define data directory
@@ -321,7 +321,7 @@ flood_dataloader = DataLoader(
 
 # ## Creating Sampleable datasets
 
-# In[13]:
+# In[6]:
 
 
 from abc import ABC, abstractmethod
@@ -348,7 +348,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[14]:
+# In[7]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -369,7 +369,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[15]:
+# In[8]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -455,7 +455,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[16]:
+# In[9]:
 
 
 ## Creating noise schedulers
@@ -579,7 +579,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[17]:
+# In[10]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -652,7 +652,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[18]:
+# In[11]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -745,7 +745,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[19]:
+# In[12]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -855,7 +855,7 @@ class Trainer(ABC):
 
 
 
-# In[20]:
+# In[13]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1012,7 +1012,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[21]:
+# In[14]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1059,7 +1059,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[22]:
+# In[15]:
 
 
 import matplotlib.pyplot as plt
@@ -1114,7 +1114,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[23]:
+# In[16]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1164,7 +1164,7 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[24]:
+# In[17]:
 
 
 ## Create CFG trainer
@@ -1216,7 +1216,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[25]:
+# In[20]:
 
 
 import numpy as np
@@ -1293,24 +1293,60 @@ class ResidualLayer(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, in_channels, out_channels, num_residual_layers, t_embed_dim, y_embed_dim):
         super().__init__()
+        # 1. The Processing Blocks
         self.res_blocks = nn.ModuleList([
-            ResidualLayer(channels = in_channels, time_embed_dim = t_embed_dim, y_embed_dim = y_embed_dim) for _ in range(num_residual_layers)
+            ResidualLayer(channels=in_channels, time_embed_dim=t_embed_dim, y_embed_dim=y_embed_dim) 
+            for _ in range(num_residual_layers)
         ])
-        self.downsample = nn.Conv2d(in_channels = in_channels, out_channels = out_channels, kernel_size = 3, stride = 2, padding = 1)
+        
+        # 2. The Downsampler (Separate)
+        self.downsample_conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=2, padding=1)
 
     def forward(self, x, t_embed, y_embed):
-        """
-        Args: 
-            x: feature map [B, C, H, W]
-            t_embed: time embedding [B, t_embed_dim]
-            y_embed: y embedding [B, y_embed_dim]
-        """
         # Pass through residual blocks
         for block in self.res_blocks:
-            x = block(x, t_embed, y_embed)  # [B, C_in, H, W] -> [B, C_in, H, W]
+            x = block(x, t_embed, y_embed)
+        
+        # SAVE THIS X for the skip connection (High Resolution)
+        skip_feature = x.clone()
 
-        # Downsample: [B, C_in, H, W] -> [B, C_out, H/2, W/2]
-        x = self.downsample(x)  # [B, C_out, H/2, W/2]
+        # DOWNSAMPLE for the next layer (Low Resolution)
+        x_down = self.downsample_conv(x)
+
+        return x_down, skip_feature
+
+class Decoder(nn.Module):
+    def __init__(self, in_channels, out_channels, num_residual_layers, t_embed_dim, y_embed_dim):
+        super().__init__()
+        
+        # 1. Upsample
+        self.upsample = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="nearest"), 
+            nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
+        )
+        
+        # 2. Residual Blocks
+        # IMPORTANT: If using concatenation (recommended), input channels would be out_channels * 2
+        # If using addition (your current method), input is out_channels. 
+        # Let's stick to your Addition method for minimal code changes, 
+        # but typically Concatenation is better for U-Nets.
+        self.res_blocks = nn.ModuleList([
+            ResidualLayer(channels=out_channels, time_embed_dim=t_embed_dim, y_embed_dim=y_embed_dim) 
+            for _ in range(num_residual_layers)
+        ])
+
+    def forward(self, x, skip_connection, t_embed, y_embed):
+        # Upsample: [B, C_in, H, W] -> [B, C_out, H*2, W*2]
+        x = self.upsample(x)
+
+        # Add Skip Connection
+        # x is [B, C_out, H*2, W*2]
+        # skip_connection is [B, C_out, H*2, W*2] (Now that we fixed the encoder!)
+        x = x + skip_connection 
+
+        # Pass through blocks
+        for block in self.res_blocks: 
+            x = block(x, t_embed, y_embed)
 
         return x
 
@@ -1334,26 +1370,7 @@ class Midcoder(nn.Module):
 
         return x
     
-class Decoder(nn.Module):
-    def __init__(self, in_channels, out_channels, num_residual_layers, t_embed_dim, y_embed_dim):
-        super().__init__()
-        self.upsample = nn.Sequential(
-            nn.Upsample(scale_factor = 2, mode = "nearest"), ## Should this be nearest?
-            nn.Conv2d(in_channels = in_channels, out_channels = out_channels, kernel_size = 3, padding = 1)
-        )
-        self.res_blocks = nn.ModuleList([
-            ResidualLayer(channels = out_channels, time_embed_dim = t_embed_dim, y_embed_dim = y_embed_dim) for _ in range(num_residual_layers)
-        ])
 
-    def forward(self, x, t_embed, y_embed):
-        ## Upsample [B, C_in, H, W] -> [B, C_out, H*2, W*2]
-        x = self.upsample(x)
-
-        # Pass through residual blocks
-        for block in self.res_blocks: # [B, C_out, H*2, W*2] -> [B, C_out, H*2, W*2]
-            x = block(x, t_embed, y_embed)
-
-        return x
     
 class FourierEncoder(nn.Module):
     """
@@ -1437,120 +1454,75 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[26]:
+# In[21]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
 ## Create Unet
 class FloodUNet(ConditionalVectorFieldCNN):
-    def __init__(
-            self,
-            channels: List[int],
-            num_residual_layers: int,
-            t_embed_dim: int,
-            y_embed_dim: int
-    ):
+    def __init__(self, channels, num_residual_layers, t_embed_dim, y_embed_dim):
         super().__init__()
 
-        # Initial convolution: [B, 1, H, W] -> [B, channels[0], H, W]
+        # Initial conv
         self.initial_conv = nn.Sequential(
-            # nn.Conv2d(in_channels = 1, out_channels= channels[0], kernel_size = 4, stride = 4, padding = 0), # Downsample by 4
-            nn.Conv2d(in_channels = 1, out_channels = channels[0], kernel_size = 3, padding = 1),
-            nn.GroupNorm(num_groups = 32, num_channels = channels[0]),
+            nn.Conv2d(in_channels=1, out_channels=channels[0], kernel_size=3, padding=1),
+            nn.GroupNorm(num_groups=32, num_channels=channels[0]),
             nn.SiLU()
         )
 
-        # Initialize time embedder
-        self.time_embedder = FourierEncoder(dim = t_embed_dim) # [B, 1, 1, 1] -> [B, t_embed_dim]
-
-        # Initialize condition embedder
+        self.time_embedder = FourierEncoder(dim=t_embed_dim)
+        
+        # (Assuming p_data global availability for map size)
         self.y_embedder = ConditionEmbedding(
-            num_month_embeddings = 13,  # 12 months + 1 for no guidance
-            num_location_embeddings = len(p_data.dataset.tile_to_int_map) + 1,  # num locations + 1 for no guidance
-            y_embed_dim = y_embed_dim
+            num_month_embeddings=13,  
+            num_location_embeddings=len(p_data.dataset.tile_to_int_map) + 1,
+            y_embed_dim=y_embed_dim
         )
 
-        # Encoders, Midcoder, Decoders
         self.encoders = nn.ModuleList()
         self.decoders = nn.ModuleList()
 
+        # Create Encoders
         for (curr_c, next_c) in zip(channels[:-1], channels[1:]):
             self.encoders.append(
-                Encoder(
-                    in_channels = curr_c,
-                    out_channels = next_c,
-                    num_residual_layers = num_residual_layers,
-                    t_embed_dim = t_embed_dim,
-                    y_embed_dim = y_embed_dim
-                )
+                Encoder(curr_c, next_c, num_residual_layers, t_embed_dim, y_embed_dim)
             )
 
+        # Create Decoders (Note: in_channels/out_channels swapped compared to encoder)
+        # We iterate backwards through channels to match the encoder structure
+        rev_channels = channels[::-1]
+        for (curr_c, next_c) in zip(rev_channels[:-1], rev_channels[1:]):
             self.decoders.append(
-                Decoder(
-                    in_channels = next_c,
-                    out_channels = curr_c,
-                    num_residual_layers = num_residual_layers,
-                    t_embed_dim = t_embed_dim,
-                    y_embed_dim = y_embed_dim
-                )
+                Decoder(curr_c, next_c, num_residual_layers, t_embed_dim, y_embed_dim)
             )
 
-        self.decoders = self.decoders[::-1]  # Reverse the order of decoders
-
-        self.midcoder = Midcoder(
-            channels = channels[-1],
-            num_residual_layers = num_residual_layers,
-            t_embed_dim = t_embed_dim,
-            y_embed_dim = y_embed_dim
-        )
-        
-        # Final convolution: [B, channels[0], H, W] -> [B, 1, H, W]
-        self.final_conv = nn.Conv2d(in_channels = channels[0], out_channels = 1, kernel_size = 3, padding = 1)
-        # self.final_conv2 = nn.ConvTranspose2d(in_channels = 1, out_channels = 1, kernel_size = 4, stride = 4, padding = 0) # Upsample by 4
-
+        self.midcoder = Midcoder(channels[-1], num_residual_layers, t_embed_dim, y_embed_dim)
+        self.final_conv = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
 
     def forward(self, x, t, y):
-        """
-        Args:
-            x: transition state [B, 1, H, W]
-            t: time [B, 1, 1, 1] between 0 and 1
-            y: guiding labels [2, B]
-        Returns:
-            u_t^theta(x|y): conditional vector field [B, 1, H, W]
-        """
-        
-        # Create time and guiding label embeddings
-        t_embed = self.time_embedder(t) # [B, t_embed_dim]
-        y_embed = self.y_embedder(y)    # [B, y_embed_dim]
+        t_embed = self.time_embedder(t)
+        y_embed = self.y_embedder(y)
 
-        # Initial conv
-        x = self.initial_conv(x) # [B, 1, H, W] -> [B, channels[0], H, W]
+        x = self.initial_conv(x)
 
-        # Create empty list to store residuals for skip connections
         residuals = []
 
-        # Pass through encoders
+        # Encoder Pass
         for encoder in self.encoders:
-            x = encoder(x, t_embed, y_embed)
-            residuals.append(x.clone()) # Store residual for skip connection
+            # x becomes the downsampled input for next layer
+            # skip becomes the residual to save
+            x, skip = encoder(x, t_embed, y_embed) 
+            residuals.append(skip)
 
-
-
-        # Pass through midcoder
+        # Midcoder
         x = self.midcoder(x, t_embed, y_embed)
 
-        # Pass through decoders
+        # Decoder Pass
         for decoder in self.decoders:
-            res = residuals.pop()
-            x = x + res # Add skip connection [B, C, H, W] + [B, C, H, W] -> [B, C, H, W]
-            x = decoder(x, t_embed, y_embed)
+            skip = residuals.pop()
+            x = decoder(x, skip, t_embed, y_embed)
 
-        # Final conv
-        x = self.final_conv(x) # [B, channles[0], H, W] -> [B, 1, H, W]
-        # x = self.final_conv2(x) # [B, 1, H, W] -> [B, 1, H*4, W*4]
-
-        return x
-        
+        return self.final_conv(x)
 
 
 # In[ ]:
