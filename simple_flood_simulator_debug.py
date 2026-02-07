@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[1]:
+# In[27]:
 
 
 import numpy as np
@@ -41,7 +41,7 @@ def imshow_normalized(tensor_img, mean = (0.5, ), std = (0.5, )):
     plt.axis('off')
 
 
-# In[2]:
+# In[28]:
 
 
 class FloodDataset(Dataset):
@@ -140,7 +140,7 @@ class FloodDataset(Dataset):
             # return None
 
 
-# In[3]:
+# In[29]:
 
 
 class FloodDataset(Dataset):
@@ -286,7 +286,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[4]:
+# In[30]:
 
 
 # Define data directory
@@ -321,7 +321,7 @@ flood_dataloader = DataLoader(
 
 # ## Creating Sampleable datasets
 
-# In[6]:
+# In[31]:
 
 
 from abc import ABC, abstractmethod
@@ -348,7 +348,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[7]:
+# In[32]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -369,7 +369,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[8]:
+# In[33]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -455,7 +455,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[9]:
+# In[34]:
 
 
 ## Creating noise schedulers
@@ -579,7 +579,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[10]:
+# In[35]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -656,7 +656,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[11]:
+# In[36]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -749,7 +749,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[12]:
+# In[37]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -859,7 +859,7 @@ class Trainer(ABC):
 
 
 
-# In[13]:
+# In[38]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1030,7 +1030,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[14]:
+# In[39]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1077,7 +1077,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[15]:
+# In[40]:
 
 
 import matplotlib.pyplot as plt
@@ -1132,7 +1132,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[16]:
+# In[41]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1182,22 +1182,7 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[2]:
-
-
-import torch
-
-rr = torch.rand(2)
-print(rr, rr*0.999)
-
-
-# In[3]:
-
-
-0.4807*0.999
-
-
-# In[17]:
+# In[42]:
 
 
 ## Create CFG trainer
@@ -1248,7 +1233,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[20]:
+# In[43]:
 
 
 import numpy as np
@@ -1487,7 +1472,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[21]:
+# In[44]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1575,7 +1560,7 @@ path = GaussianConditionalProbabilityPath(
 
 # Initialize model
 floodnet = FloodUNet(
-    channels = [128, 128, 256, 512], #  [128, 128, 256, 512, 1024, 1024]
+    channels = [32, 64, 128, 256, 512], #  [128, 128, 256, 512, 1024, 1024]
     num_residual_layers = 2,
     t_embed_dim = 64,
     y_embed_dim = 64
@@ -1586,7 +1571,7 @@ floodnet = FloodUNet(
 trainer = CFGTrainer(
     path = path,
     model = floodnet,
-    eta = 0.1,
+    eta = 0.0,  # No label dropping for initial training
     device = device
 )
 
