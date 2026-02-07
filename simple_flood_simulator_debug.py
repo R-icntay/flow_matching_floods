@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[27]:
+# In[38]:
 
 
 import numpy as np
@@ -41,7 +41,7 @@ def imshow_normalized(tensor_img, mean = (0.5, ), std = (0.5, )):
     plt.axis('off')
 
 
-# In[28]:
+# In[39]:
 
 
 class FloodDataset(Dataset):
@@ -140,7 +140,7 @@ class FloodDataset(Dataset):
             # return None
 
 
-# In[29]:
+# In[40]:
 
 
 class FloodDataset(Dataset):
@@ -286,7 +286,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[30]:
+# In[68]:
 
 
 # Define data directory
@@ -321,7 +321,7 @@ flood_dataloader = DataLoader(
 
 # ## Creating Sampleable datasets
 
-# In[31]:
+# In[42]:
 
 
 from abc import ABC, abstractmethod
@@ -348,7 +348,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[32]:
+# In[43]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -369,7 +369,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[33]:
+# In[44]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -455,7 +455,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[34]:
+# In[45]:
 
 
 ## Creating noise schedulers
@@ -579,7 +579,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[35]:
+# In[46]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -656,7 +656,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[36]:
+# In[47]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -749,7 +749,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[37]:
+# In[ ]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -813,9 +813,10 @@ def model_size_b(model):
     return size
 
 class Trainer(ABC):
-    def __init__(self, model):
+    def __init__(self, model, grad_clip_norm = 1.0):
         super().__init__()
         self.model = model
+        self.grad_clip_norm = grad_clip_norm
         self.losses = []
 
     @abstractmethod
@@ -824,8 +825,36 @@ class Trainer(ABC):
 
     def get_optimizer(self, lr):
         return torch.optim.Adam(self.model.parameters(), lr = lr)
+
+
+    def get_polynomial_decay_schedule_with_warmup(self, optimizer, num_warmup_epochs, num_training_epochs, lr_end = 1e-8, power = 1.0, last_epoch = -1):
+        """
+        Returns a learning rate scheduler with polynomial decay and warmup.
+        """
+        def lr_lambda(current_epoch):
+            # Warmup phase: linearly increase learning rate
+            if current_epoch < num_warmup_epochs:
+                return float(current_epoch) / float(max(1, num_warmup_epochs))
+
+            # Decay phase
+            elif current_epoch > num_training_epochs:
+                return lr_end
+            
+            else:
+                # Calculate the decay factor
+                total_decay_epochs = num_training_epochs - num_warmup_epochs
+                last_epoch_in_decay = current_epoch - num_warmup_epochs
+
+                decay_factor = (1 - (last_epoch_in_decay / total_decay_epochs)) ** power
+                return decay_factor
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+                
+
+
+
     
-    def train(self, num_epochs, device, lr = 1e-3, **kwargs):
+    def train(self, num_epochs, device, lr = 1e-3, warmup_epochs = 100, **kwargs):
         # Report model size
         size_b = model_size_b(self.model)
         print(f"Model size: {size_b / MiB:.3f} MiB")
@@ -834,6 +863,7 @@ class Trainer(ABC):
         self.model.to(device)
         self.model.train()
         optimizer = self.get_optimizer(lr)
+        scheduler = self.get_polynomial_decay_schedule_with_warmup(optimizer, warmup_epochs, num_epochs)
 
         pbar = tqdm(enumerate(range(num_epochs)))
         for idx, epoch in pbar:
@@ -848,8 +878,16 @@ class Trainer(ABC):
             # Gradient of loss wrt model parameters
             loss.backward()
 
+            # Gradient clipping
+            if self.grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+
             # Update model parameters
             optimizer.step()
+
+            # Update learning rate after each epoch
+            scheduler.step()
+            
 
             pbar.set_description(f"Epoch {idx}, loss: {loss.item():.3f}")
 
@@ -859,7 +897,7 @@ class Trainer(ABC):
 
 
 
-# In[38]:
+# In[49]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1030,7 +1068,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[39]:
+# In[50]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1077,12 +1115,12 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[40]:
+# In[70]:
 
 
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
-
+get_ipython().run_line_magic('matplotlib', 'inline')
 num_rows = 1
 num_cols = 1
 num_timesteps = 5
@@ -1132,7 +1170,27 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[41]:
+# In[16]:
+
+
+plt.figure(figsize = (10, 10))
+rows, cols = 4, 4
+metadata_list = []
+for i in range(1, cols * rows + 1):
+    sample_idx = torch.randperm(len(flood_dataset))[0]
+    # Get a sample
+    sample = flood_dataset[sample_idx]
+    img, label, meta = sample
+    metadata_list.append(Path(meta['path']).stem.split('_flood_map')[0])
+    plt.subplot(rows, cols, i)
+    imshow_normalized(img)
+    plt.title(f"{Path(meta['path']).stem.split('_flood_map')[0]}")
+
+plt.tight_layout()
+# plt.savefig("flood_samples_sdf.png", dpi = 1000)
+
+
+# In[17]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1182,16 +1240,16 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[42]:
+# In[ ]:
 
 
 ## Create CFG trainer
 ## Labels ae dropped with prop n
 
 class CFGTrainer(Trainer):
-    def __init__(self, path, model, eta, device, **kwargs):
-        assert eta > 0 and eta <1
-        super().__init__(model, **kwargs)
+    def __init__(self, path, model, eta, device, grad_clip_norm=1.0, **kwargs):
+        assert eta >= 0 and eta <1
+        super().__init__(model, grad_clip_norm, **kwargs)
         self.eta = eta
         self.path = path
         self.device = device
@@ -1233,7 +1291,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[43]:
+# In[19]:
 
 
 import numpy as np
@@ -1472,7 +1530,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[44]:
+# In[20]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1572,11 +1630,12 @@ trainer = CFGTrainer(
     path = path,
     model = floodnet,
     eta = 0.0,  # No label dropping for initial training
-    device = device
+    device = device,
+    grad_clip_norm = 1.0
 )
 
 # Train model
-trainer.train(num_epochs = 1000, device = device, lr = 1e-4, batch_size = 8)
+trainer.train(num_epochs = 1000, device = device, lr = 1e-4, warmup_epochs = 100, batch_size = 8)
 
 # Save model
 torch.save(floodnet.state_dict(), "floodnet_cfg_bin_not_norm.pth")
@@ -1587,7 +1646,7 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_bin_not_norm.pth")
 # model.eval()
 
 
-# In[24]:
+# In[51]:
 
 
 ## Plot losses
@@ -1599,14 +1658,112 @@ plt.xlabel("Epoch")
 plt.show()
 
 
-# In[30]:
+# In[74]:
+
+
+## Visualize the flow: noise → data trajectory
+floodnet.eval()
+
+with torch.no_grad():
+    # Setup ODE and simulator
+    ode = CFGVectorFieldODE(net=floodnet, guidance_scale=1.0)
+    simulator = EulerSimulator(ode=ode)
+    
+    # Sample initial noise from p_simple
+    num_samples = 1
+    x0, _ = path.p_simple.sample(num_samples)
+    x0 = x0.to(device)
+    
+    # Get ground truth data and labels
+    z, month_labels, location_labels = path.sample_conditioning_variable(num_samples)
+    z = z.to(device)
+    month_labels = month_labels.to(device)
+    location_labels = location_labels.to(device)
+    y = torch.stack([month_labels, location_labels], dim=0)
+    
+    # Define time steps - use more steps for smoother visualization
+    num_steps = 50
+    ts = torch.linspace(0, 1, num_steps).view(1, -1, 1, 1).expand(num_samples, -1, 1, 1).to(device)
+    
+    # Simulate WITH trajectory recording
+    trajectory = simulator.simulate_with_trajectory(x=x0, ts=ts, y=y)  # [B, num_steps, C, H, W]
+    
+    # Select frames to display (e.g., 8 frames evenly spaced)
+    num_frames = 8
+    frame_indices = torch.linspace(0, num_steps - 1, num_frames).long()
+    
+    # Plot the trajectory
+    fig, axes = plt.subplots(1, num_frames + 1, figsize=(3 * (num_frames + 1), 3))
+    
+    for i, idx in enumerate(frame_indices):
+        t_val = ts[0, idx, 0, 0].item()
+        frame = trajectory[0, idx, 0].cpu().numpy()
+        axes[i].imshow(frame, cmap='viridis', vmin=-1, vmax=1)
+        axes[i].set_title(f't = {t_val:.2f}')
+        axes[i].axis('off')
+    
+    # Show ground truth for comparison
+    axes[-1].imshow(z[0, 0].cpu().numpy(), cmap='viridis', vmin=-1, vmax=1)
+    axes[-1].set_title('Ground Truth')
+    axes[-1].axis('off')
+    
+    plt.suptitle('Flow Matching: Noise → Data Transformation', fontsize=14)
+    plt.tight_layout()
+    plt.savefig("flow_trajectory.png", dpi=150, bbox_inches='tight')
+    plt.show()
+
+
+# In[73]:
+
+
+## Create animated GIF of the flow (optional - requires imageio)
+# pip install imageio if not installed
+
+try:
+    import imageio
+    
+    # Normalize trajectory for visualization
+    traj_np = trajectory[0, :, 0].cpu().numpy()  # [num_steps, H, W]
+    
+    # Normalize to 0-255 for GIF
+    vmin, vmax = -1, 1
+    traj_normalized = np.clip((traj_np - vmin) / (vmax - vmin), 0, 1)
+    traj_uint8 = (traj_normalized * 255).astype(np.uint8)
+    
+    # Apply colormap (viridis)
+    from matplotlib import cm
+    frames = []
+    for i in range(traj_uint8.shape[0]):
+        # Apply viridis colormap
+        colored = (cm.viridis(traj_normalized[i])[:, :, :3] * 255).astype(np.uint8)
+        frames.append(colored)
+    
+    # Add ground truth at the end (repeat a few times)
+    gt_normalized = np.clip((z[0, 0].cpu().numpy() - vmin) / (vmax - vmin), 0, 1)
+    gt_colored = (cm.viridis(gt_normalized)[:, :, :3] * 255).astype(np.uint8)
+    for _ in range(10):
+        frames.append(gt_colored)
+    
+    # Save as GIF
+    imageio.mimsave('flow_animation.gif', frames, fps=10, loop=0)
+    print("Saved animation to flow_animation.gif")
+    
+    # Display in notebook (if IPython available)
+    from IPython.display import Image, display
+    display(Image(filename='flow_animation.gif'))
+    
+except ImportError:
+    print("Install imageio for GIF animation: pip install imageio")
+
+
+# In[72]:
 
 
 # Put model in eval mode
 floodnet.eval()
 with torch.no_grad():
     # Setup ode and simulator
-    ode = CFGVectorFieldODE(net = floodnet, guidance_scale = 4.0)
+    ode = CFGVectorFieldODE(net = floodnet, guidance_scale = 1.0)
     simulator = EulerSimulator(ode = ode)
     # Sample from p_simple
     num_samples = 1
@@ -1627,7 +1784,7 @@ with torch.no_grad():
     # Simulate forward process to t=1
     x1 =  simulator.simulate(x = x0, ts = ts, y = y)  # [B, C, H, W]
     # Binarize output
-    x1 = (x1 <= 0).float()
+    # x1 = (x1 > 1).float()
 
     #Plot generated samples
     fig, axs = plt.subplots(1, 2, figsize = (12, 6))
@@ -1644,4 +1801,40 @@ with torch.no_grad():
     
 
 
+
+
+# In[82]:
+
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+#Plot generated samples
+fig, axs = plt.subplots(1, 2, figsize = (12, 6))
+axs[0].imshow(z[0, 0].cpu(), cmap = 'gray',)
+axs[0].set_title("Data sample z")
+axs[0].axis('off')
+
+axs[1].imshow(x1[0, 0].cpu() < 0.2, cmap = 'gray', )
+axs[1].set_title("Simulated x at t=1")
+axs[1].axis('off')
+
+
+# In[36]:
+
+
+## Histogram of x1 values
+plt.hist(x1.cpu().numpy().flatten(), bins = 20)
+plt.title("Histogram of x1 values at t=1")
+
+
+# In[74]:
+
+
+x1.min(), x1.max()
+
+
+# In[35]:
+
+
+0.2-0.01
 
