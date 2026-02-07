@@ -586,6 +586,7 @@ class LinearBeta(Beta):
 class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
     """
     Conditional probability path where p_t(.|z) = N(x; alpha_t * z, beta_t^2 * I)
+    For linear interpolation (alpha_t = t, beta_t = 1-t), this is optimal transport.
     """
     def __init__(self, p_data, p_simple_shape, alpha, beta):
         p_simple = IsotropicGaussian(shape = p_simple_shape, std = 1.0)
@@ -622,7 +623,14 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
     def conditional_vector_field(self, x, z, t):
         """
-        Computes the conditional vetcor field u_t(x|z) = [dt_alpha_t - dt_beta_t / beta_t * alpha_t]*z + dt_beta_t / beta_t * x
+        Computes the conditional vector field for linear optimal transport path.
+        
+        For alpha_t = t, beta_t = 1-t (linear interpolation):
+        x_t = t*z + (1-t)*eps
+        
+        The conditional vector field is:
+        u_t(x|z) = (z - x) / (1 - t)
+        
         Args:
             x: transition state [B, C, H, W]
             z: conditioning variable [B, C, H, W]
@@ -630,14 +638,9 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
         Returns:
             u_t(x|z): conditional vector field [B, C, H, W]
         """
-        alpha_t = self.alpha(t) # [B, 1, 1, 1]
-        beta_t = self.beta(t)   # [B, 1, 1, 1]
-        dt_alpha_t = self.alpha.dt(t) # [B, 1, 1, 1]
-        dt_beta_t = self.beta.dt(t)   # [B, 1, 1, 1]
-
-        scale_z = (dt_alpha_t - (dt_beta_t / beta_t) * alpha_t) * z # [B, C, H, W]
-        scale_x = (dt_beta_t / beta_t) * x                           # [B, C, H, W]
-        return scale_z + scale_x # [B, C, H, W]
+        # Use the simplified OT formula with numerical stability
+        eps = 1e-5
+        return (z - x) / (1.0 - t + eps)
     
 
     def conditional_score(self, x, z, t):
@@ -647,7 +650,8 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
         """
         alpha_t = self.alpha(t) # [B, 1, 1, 1]
         beta_t = self.beta(t)   # [B, 1, 1, 1]
-        return (z * alpha_t - x) / (beta_t ** 2) # [B, C, H, W]
+        eps = 1e-5
+        return (z * alpha_t - x) / (beta_t ** 2 + eps) # [B, C, H, W]
 
 
 
@@ -946,6 +950,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
 class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
     """
     Conditional probability path where p_t(.|z) = N(x; alpha_t * z, beta_t^2 * I)
+    For linear interpolation (alpha_t = t, beta_t = 1-t), this is optimal transport.
     """
     def __init__(self, p_data, p_simple_shape, alpha, beta):
         p_simple = IsotropicGaussian(shape = p_simple_shape, std = 1.0)
@@ -982,7 +987,23 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
     def conditional_vector_field(self, x, z, t):
         """
-        Computes the conditional vetcor field u_t(x|z) = [dt_alpha_t - dt_beta_t / beta_t * alpha_t]*z + dt_beta_t / beta_t * x
+        Computes the conditional vector field for linear optimal transport path.
+        
+        For alpha_t = t, beta_t = 1-t (linear interpolation):
+        x_t = t*z + (1-t)*eps
+        
+        The conditional vector field is simply:
+        u_t(x|z) = z - eps = z - (x_t - t*z)/(1-t)
+        
+        But we can use the simpler form that doesn't have singularity:
+        u_t(x|z) = z - x_0 where x_0 is the noise
+        
+        Since x_t = t*z + (1-t)*x_0, we have x_0 = (x_t - t*z)/(1-t)
+        So u_t = z - (x_t - t*z)/(1-t) = (z - x_t)/(1-t)
+        
+        For numerical stability, we use the equivalent form:
+        u_t(x|z) = (z - x) / (1 - t + 1e-8)
+        
         Args:
             x: transition state [B, C, H, W]
             z: conditioning variable [B, C, H, W]
@@ -990,14 +1011,10 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
         Returns:
             u_t(x|z): conditional vector field [B, C, H, W]
         """
-        alpha_t = self.alpha(t) # [B, 1, 1, 1]
-        beta_t = self.beta(t)   # [B, 1, 1, 1]
-        dt_alpha_t = self.alpha.dt(t) # [B, 1, 1, 1]
-        dt_beta_t = self.beta.dt(t)   # [B, 1, 1, 1]
-
-        scale_z = (dt_alpha_t - (dt_beta_t / beta_t) * alpha_t) * z # [B, C, H, W]
-        scale_x = (dt_beta_t / beta_t) * x                           # [B, C, H, W]
-        return scale_z + scale_x # [B, C, H, W]
+        # Use the simplified OT formula with numerical stability
+        # u_t(x|z) = (z - x) / (1 - t)
+        eps = 1e-5
+        return (z - x) / (1.0 - t + eps)
     
 
     def conditional_score(self, x, z, t):
@@ -1007,7 +1024,8 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
         """
         alpha_t = self.alpha(t) # [B, 1, 1, 1]
         beta_t = self.beta(t)   # [B, 1, 1, 1]
-        return (z * alpha_t - x) / (beta_t ** 2) # [B, C, H, W]
+        eps = 1e-5
+        return (z * alpha_t - x) / (beta_t ** 2 + eps) # [B, C, H, W]
 
 
 
@@ -1164,6 +1182,21 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
+# In[2]:
+
+
+import torch
+
+rr = torch.rand(2)
+print(rr, rr*0.999)
+
+
+# In[3]:
+
+
+0.4807*0.999
+
+
 # In[17]:
 
 
@@ -1180,8 +1213,9 @@ class CFGTrainer(Trainer):
 
     def get_train_loss(self, batch_size):
         # Sample time from a uniform distribution
-        # t ~ uniform(0, 1)
-        t = torch.rand(batch_size, 1, 1, 1, device = self.device)  # [B, 1, 1, 1]
+        # t ~ uniform(0, 1-eps) to avoid singularity at t=1
+        t_max = 0.999  # Avoid t=1 where vector field becomes singular
+        t = torch.rand(batch_size, 1, 1, 1, device = self.device) * t_max  # [B, 1, 1, 1]
 
         # Sample data point z and labels y from p_data 
         # z, y ~ p_data
@@ -1198,17 +1232,15 @@ class CFGTrainer(Trainer):
         x_t = self.path.sample_conditional_path(z, t)  # [B, C, H, W]
 
         # Compute the conditional vector field
-        # u_t(x|z) = [dt_alpha_t - dt_beta_t / beta_t * alpha_t]*z + dt_beta_t  beta_t * x
+        # u_t(x|z) = (z - x) / (1 - t) for optimal transport path
         ut_ref = self.path.conditional_vector_field(x_t, z, t)  # [B, C, H, W]
 
         # Compute the model predicted vector field u_t^theta(x, y)
         ut_theta = self.model(x_t, t, y) # [B, C, H, W]
 
         # Compute MSE loss between reference and model predicted vector fields
-        # error = torch.einsum('bchw -> b', torch.square(ut_theta - ut_ref)) # (bs,)
         error = torch.square(ut_theta - ut_ref)  # [B, C, H, W]
-        error = torch.sum(error, dim = (1, 2, 3))  # [B]
-        loss = torch.mean(error)  # scalar
+        loss = torch.mean(error)  # scalar (average over all pixels and batch)
         return loss
         
 
@@ -1342,6 +1374,7 @@ class Decoder(nn.Module):
         # Add Skip Connection
         # x is [B, C_out, H*2, W*2]
         # skip_connection is [B, C_out, H*2, W*2] (Now that we fixed the encoder!)
+        assert x.shape == skip_connection.shape, "Shape mismatch between upsampled x and skip connection"
         x = x + skip_connection 
 
         # Pass through blocks
@@ -1386,7 +1419,7 @@ class FourierEncoder(nn.Module):
     def forward(self, t):
         """
         Args:
-            t: [B] time step tensor
+            t: [B] or [B, 1, 1, 1] time step tensor
         Returns:
             t_embed: [B, t_embed_dim] Learned Fourier encoded time embedding
 
@@ -1558,7 +1591,7 @@ trainer = CFGTrainer(
 )
 
 # Train model
-trainer.train(num_epochs = 1000, device = device, lr = 1e-3, batch_size = 8)
+trainer.train(num_epochs = 1000, device = device, lr = 1e-4, batch_size = 8)
 
 # Save model
 torch.save(floodnet.state_dict(), "floodnet_cfg_bin_not_norm.pth")
@@ -1569,19 +1602,19 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_bin_not_norm.pth")
 # model.eval()
 
 
-# In[167]:
+# In[24]:
 
 
 ## Plot losses
 plt.plot(trainer.losses[:])
-# plt.yscale('log')
+plt.yscale('log')
 plt.xlabel("Epoch")
 # Save losses plot
 # plt.savefig("training_losses2_cfg.png", dpi = 500)
 plt.show()
 
 
-# In[174]:
+# In[30]:
 
 
 # Put model in eval mode
