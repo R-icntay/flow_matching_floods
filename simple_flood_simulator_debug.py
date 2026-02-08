@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[1]:
+# In[ ]:
 
 
 import numpy as np
@@ -40,8 +40,16 @@ def imshow_normalized(tensor_img, mean = (0.5, ), std = (0.5, )):
     plt.imshow(img)
     plt.axis('off')
 
+def fmap_idx_finder(fmap_basename, flood_dataset):
+    """
+    Find the index of a flood map in the dataset given its basename (e.g., '2018-04_N00E039_flood_map').
+    Example usage: fmap_idx_finder('2018-04_N00E039_flood_map', flood_dataset) returns the index of that flood map in the dataset.
+    """
+    fmaps = [flood_dataset.path_month[i][0].stem for i in range(len(flood_dataset))]
+    return fmaps.index(fmap_basename)
 
-# In[2]:
+
+# In[3]:
 
 
 class FloodDataset(Dataset):
@@ -140,7 +148,7 @@ class FloodDataset(Dataset):
             # return None
 
 
-# In[3]:
+# In[5]:
 
 
 class FloodDataset(Dataset):
@@ -286,7 +294,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[4]:
+# In[48]:
 
 
 # Define data directory
@@ -300,7 +308,7 @@ transform = v2.Compose([
     v2.ToDtype(torch.float32, scale = False),
 
     # Apply random horizontal flip
-    v2.RandomHorizontalFlip(p = 0.5),
+    # v2.RandomHorizontalFlip(p = 0.5),
     # Apply normalization to center data around 0, this will scale values to [-1, 1]
     # v2.Normalize(mean = [0.5], std = [0.5])
 ])
@@ -321,7 +329,7 @@ flood_dataloader = DataLoader(
 
 # ## Creating Sampleable datasets
 
-# In[5]:
+# In[49]:
 
 
 from abc import ABC, abstractmethod
@@ -348,7 +356,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[6]:
+# In[50]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -369,7 +377,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[7]:
+# In[51]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -455,7 +463,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[8]:
+# In[52]:
 
 
 ## Creating noise schedulers
@@ -579,7 +587,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[9]:
+# In[17]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -656,7 +664,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[10]:
+# In[18]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -749,7 +757,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[11]:
+# In[19]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -897,7 +905,7 @@ class Trainer(ABC):
 
 
 
-# In[12]:
+# In[20]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1068,7 +1076,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[13]:
+# In[32]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1085,8 +1093,8 @@ class flood_map_sampler(nn.Module, Sampleable):
         if num_samples > len(self.dataset):
             raise ValueError(f"Requested {num_samples} samples, but dataset only has {len(self.dataset)} samples.")
         
-        # indices = [9]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
-        indices = torch.randperm(len(self.dataset))[:num_samples]
+        indices = [470]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
+        # indices = torch.randperm(len(self.dataset))[:num_samples]
         samples = [self.dataset[i][0] for i in indices]
         
         month_labels = [self.dataset[i][1] for i in indices]
@@ -1116,7 +1124,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[27]:
+# In[55]:
 
 
 import matplotlib.pyplot as plt
@@ -1171,7 +1179,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[28]:
+# In[24]:
 
 
 plt.figure(figsize = (10, 10))
@@ -1191,7 +1199,7 @@ plt.tight_layout()
 # plt.savefig("flood_samples_sdf.png", dpi = 1000)
 
 
-# In[29]:
+# In[34]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1241,7 +1249,14 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[30]:
+# In[40]:
+
+
+a = torch.randn(10, 2, 2)
+a.mean(dim = (1, 2)).shape
+
+
+# In[35]:
 
 
 ## Create CFG trainer
@@ -1292,7 +1307,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[31]:
+# In[36]:
 
 
 import numpy as np
@@ -1531,7 +1546,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[32]:
+# In[37]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1602,7 +1617,7 @@ class FloodUNet(ConditionalVectorFieldCNN):
         return self.final_conv(x)
 
 
-# In[33]:
+# In[38]:
 
 
 ## Train unet 
@@ -1630,13 +1645,13 @@ floodnet = FloodUNet(
 trainer = CFGTrainer(
     path = path,
     model = floodnet,
-    eta = 0.1,  # No label dropping for initial training
+    eta = 0.0,  # No label dropping for initial training
     device = device,
     grad_clip_norm = 1.0
 )
 
 # Train model
-trainer.train(num_epochs = 5000, device = device, lr = 1e-4, warmup_epochs = 500, batch_size = 8)
+trainer.train(num_epochs = 1000, device = device, lr = 1e-4, warmup_epochs = 100, batch_size = 8)
 
 # Save model
 torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
@@ -1647,7 +1662,7 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
 # model.eval()
 
 
-# In[34]:
+# In[41]:
 
 
 ## Plot losses
@@ -1659,7 +1674,7 @@ plt.xlabel("Epoch")
 plt.show()
 
 
-# In[35]:
+# In[68]:
 
 
 ## Visualize the flow: noise → data trajectory
@@ -1714,7 +1729,19 @@ with torch.no_grad():
     plt.show()
 
 
-# In[73]:
+# In[64]:
+
+
+plt.imshow(trajectory[0, -1, 0].cpu().numpy(), vmin = -1, vmax = 1)
+
+
+# In[46]:
+
+
+trajectory.shape
+
+
+# In[44]:
 
 
 ## Create animated GIF of the flow (optional - requires imageio)
@@ -1757,7 +1784,7 @@ except ImportError:
     print("Install imageio for GIF animation: pip install imageio")
 
 
-# In[54]:
+# In[87]:
 
 
 # Put model in eval mode
@@ -1784,16 +1811,22 @@ with torch.no_grad():
     
     # Simulate forward process to t=1
     x1 =  simulator.simulate(x = x0, ts = ts, y = y)  # [B, C, H, W]
+    # vmin, vamx = -1, 1
+    # x1 = torch.clip((x1 - vmin)/(vmax - vmin), 0, 1)
+    # x1 = (x1 * 255).to(torch.uint8)
+
+
+    
     # Binarize output
     # x1 = (x1 > 1).float()
 
     #Plot generated samples
     fig, axs = plt.subplots(1, 2, figsize = (12, 6))
-    axs[0].imshow(z[0, 0].cpu(), cmap = 'gray',)
+    axs[0].imshow(z[0, 0].cpu(),)
     axs[0].set_title("Data sample z")
     axs[0].axis('off')
 
-    axs[1].imshow(x1[0, 0].cpu(), cmap = 'gray', )
+    axs[1].imshow(x1[0, 0].cpu(), cmap = 'viridis', vmin = -1, vmax = 1)
     axs[1].set_title("Simulated x at t=1")
     axs[1].axis('off')
 
@@ -1804,28 +1837,150 @@ with torch.no_grad():
 
 
 
-# In[44]:
+# In[102]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 #Plot generated samples
 fig, axs = plt.subplots(1, 2, figsize = (12, 6))
-axs[0].imshow(z[0, 0].cpu(), cmap = 'gray',)
+axs[0].imshow(z[0, 0].cpu()<0, cmap = 'gray',)
 axs[0].set_title("Data sample z")
 axs[0].axis('off')
 
-axs[1].imshow(x1[0, 0].cpu() < 0.15, cmap = 'gray', )
+axs[1].imshow(x1[0, 0].cpu() < 0.4, cmap = 'gray', )
 axs[1].set_title("Simulated x at t=1")
 axs[1].axis('off')
 
 
-# In[49]:
+# In[93]:
 
 
 ## Histogram of x1 values
-plt.hist(x1.cpu().numpy().flatten(), bins = 2)
+plt.hist(x1.cpu().numpy().flatten(), bins = 20)
 plt.title("Histogram of x1 values at t=1")
+
+
+# In[103]:
+
+
+def generate_probability_map(model, simulator, z, month_labels, location_labels, num_samples = 100):
+    """
+    Generates a marginal probability map for flood occurrence using Monte Carlo sampling.
+    """
+    model.eval()
+    device = next(model.parameters()).device
+
+    z = z.to(device)
+    month_labels = month_labels.to(device)
+    location_labels = location_labels.to(device)
+    y = torch.stack([month_labels, location_labels], dim = 0)  # [2, B]
+
+    sdfs = []
+    print("Generating probability map with Monte Carlo sampling...")
+    with torch.no_grad():
+        for _ in tqdm(range(num_samples)):
+            # Sample from p_simple
+            x0, _ = path.p_simple.sample(1) # [1, C, H, W]
+            x0 = x0.to(device)
+
+            # Simulate forward process to t=1
+            ts = torch.linspace(0, 1, 50).view(1, -1, 1, 1).to(device)
+            x1 =  simulator.simulate(x = x0, ts = ts, y = y)  # [B, C, H, W]
+
+            # # Threshold to get binary flood map
+            sdf = (x1[0, 0] < 0.4).float()  # [H, W]
+            # sdf = x1[0, 0]  # Use raw values for probability map
+
+            sdfs.append(sdf.cpu())
+
+    # Stack and average to get probability map
+    sdfs = torch.stack(sdfs, dim = 0)  # [num_samples, H, W]
+    probability_map = sdfs.mean(dim = 0)  # [H, W] - average flood occurrence across samples
+    uncertainty_map = sdfs.var(dim = 0)  # [H, W] - variance as uncertainty measure
+    return probability_map, uncertainty_map
+
+
+prob_map, uncert_map = generate_probability_map(model = floodnet, simulator = simulator, z = z, month_labels = month_labels, location_labels = location_labels, num_samples = 20)
+
+
+# In[110]:
+
+
+plt.imshow(prob_map>0.2, cmap = 'viridis', vmin = 0, vmax = 1)
+
+
+# In[108]:
+
+
+# --- Plotting ---
+fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+
+# Plot Probability
+im1 = ax[0].imshow(prob_map, cmap='jet', vmin=0, vmax=1)
+ax[0].set_title("Marginal Probability of Flood\n(Red=High Prob, Blue=Low Prob)")
+plt.colorbar(im1, ax=ax[0], fraction=0.046, pad=0.04)
+
+# Plot Uncertainty (Variance)
+im2 = ax[1].imshow(uncert_map, cmap='magma', vmin = 0, vmax = uncert_map.max())
+ax[1].set_title("Model Uncertainty\n(Bright=Variable Boundaries)")
+plt.colorbar(im2, ax=ax[1], fraction=0.046, pad=0.04)
+
+plt.show()
+
+
+# In[ ]:
+
+
+## KDE visualization of generated samples (simpler approach)
+from scipy.stats import gaussian_kde
+
+floodnet.eval()
+with torch.no_grad():
+    # Generate many samples
+    num_gen = 100
+    generated_samples = []
+    
+    for _ in range(num_gen // 8):
+        x0, _ = path.p_simple.sample(8)
+        x0 = x0.to(device)
+        z, m, l = path.sample_conditioning_variable(8)
+        y = torch.stack([m.to(device), l.to(device)], dim=0)
+        
+        ts = torch.linspace(0, 1, 50).view(1, -1, 1, 1).expand(8, -1, 1, 1).to(device)
+        ode = CFGVectorFieldODE(net=floodnet, guidance_scale=1.0)
+        simulator = EulerSimulator(ode=ode)
+        x1 = simulator.simulate(x=x0, ts=ts, y=y)
+        generated_samples.append(x1.cpu())
+    
+    generated = torch.cat(generated_samples, dim=0)  # [N, 1, H, W]
+
+# Compute mean flood extent per sample
+flood_extents = (generated[:, 0] < 0).float().mean(dim=(1, 2)).numpy()
+
+# Plot histogram of flood extents
+plt.figure(figsize=(10, 4))
+plt.subplot(1, 2, 1)
+plt.hist(flood_extents, bins=30, density=True, alpha=0.7)
+plt.xlabel('Flood Extent (fraction of pixels)')
+plt.ylabel('Density')
+plt.title('Distribution of Generated Flood Extents')
+
+# Compare with real data
+real_extents = []
+for i in range(min(100, len(flood_dataset))):
+    mask = flood_dataset[i][0]
+    real_extents.append((mask > 0.5).float().mean().item())
+
+plt.subplot(1, 2, 2)
+plt.hist(real_extents, bins=30, density=True, alpha=0.7, label='Real')
+plt.hist(flood_extents, bins=30, density=True, alpha=0.7, label='Generated')
+plt.xlabel('Flood Extent')
+plt.ylabel('Density')
+plt.legend()
+plt.title('Real vs Generated Distribution')
+plt.tight_layout()
+plt.show()
 
 
 # ## To do
