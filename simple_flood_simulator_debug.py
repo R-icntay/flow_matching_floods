@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[ ]:
+# In[24]:
 
 
 import numpy as np
@@ -23,6 +23,10 @@ from pathlib import Path
 import re
 from datetime import datetime
 from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import binary_dilation
+from skimage.morphology import disk
+from scipy.ndimage import binary_erosion
+
 
 def imshow_normalized(tensor_img, mean = (0.5, ), std = (0.5, )):
     """
@@ -49,112 +53,16 @@ def fmap_idx_finder(fmap_basename, flood_dataset):
     return fmaps.index(fmap_basename)
 
 
-# In[3]:
+# In[12]:
 
 
+structure = np.ones((3, 3))  # Or disk for rounder
+# structure = disk(2)  # For more natural dilation of flood areas
 class FloodDataset(Dataset):
-    def __init__(self, root_dir, target_size = (1024, 1024), transform = None):
+    def __init__(self, root_dir, target_size = (256, 256), dilate_mask = False, to_sdf = False, sdf_threshold = 10, transform = None):
         self.root_dir = Path(root_dir)
         self.target_size = target_size
-        self.transform = transform
-
-        image_paths = natsorted(list(self.root_dir.rglob('*.tif')))
-        self.tile_to_int_map = self.tile_to_int(image_paths)
-        
-        if not image_paths:
-            raise ValueError(f"No .tif files found in {root_dir}")
-        
-        self.path_month = []
-
-        for p in image_paths:
-            try:
-                month = self._infer_month_from_path(p)
-                self.path_month.append((p, month))
-            except ValueError as e:
-                print(f"Skipping {p.name}: {e}")
-
-        # self.months = [self._infer_month_from_path(p) for p in self.image_paths]
-        
-    def __len__(self):
-        return len(self.path_month)
-    
-    def __getitem__(self, idx):
-        # Obtain image path and corresponding month
-        img_path, month = self.path_month[idx]
-        # month = int(self._infer_month_from_path(img_path))
-
-        # Resample image to target size
-        arr = self._resample(img_path)
-      
-        # Arr is currently uint8 values, 0, 1, 2
-        mask = np.where(arr == 2, 1, 0).astype(np.uint8)
-        # mask = mask[None, :, :]  # 1, H, W
-        mask = torch.from_numpy(mask).to(torch.float32).unsqueeze(0)  # 1, H, W
-        arr = None
-
-        if self.transform:
-            mask = self.transform(mask)
-
-        meta = {
-            "path": str(img_path),
-            "month": month
-        }
-
-        return mask, int(month - 1), meta
-
-    
-    def _resample(self, p: Path) -> np.ndarray:
-        """
-        Use rasterio to resample the first band to target size.
-        """
-        with rasterio.open(p) as src:
-            arr = src.read(
-                1,
-                out_shape = self.target_size,
-                resampling = Resampling.nearest # Since these are binary flood maps
-            )
-
-        return arr.astype(np.uint8)
-    
-    @staticmethod
-    def tile_to_int(image_paths):
-        tile_list = []
-        pattern = re.compile(r'([A-Z]\d+[A-Z]\d+)')
-        for p in image_paths:
-            match = pattern.search(p.stem)
-            if match:
-                tile_list.append(match.group(1))
-            else:
-                tile_list.append(None)
-
-        # Get unique tiles and map to integers
-        unique_tiles = natsorted(set(filter(None, tile_list)))
-
-        tile_to_int_map = {tile: idx for idx, tile in enumerate(unique_tiles)}
-        return tile_to_int_map
-
-    @staticmethod
-    def _infer_month_from_path(path):
-        filename = path.stem
-
-        match = re.match(r'^(\d{4}-\d{2})', filename)
-        if match:
-            year_month = match.group(1)
-            year_month = datetime.strptime(year_month, "%Y-%m")
-            return year_month.month
-        else:
-            raise ValueError(f"Filename {filename} does not match expected pattern 'YYYY-MM...'.")
-            # print(f"Pattern not found in filename: {filename}. Defaulting to None.")
-            # return None
-
-
-# In[5]:
-
-
-class FloodDataset(Dataset):
-    def __init__(self, root_dir, target_size = (256, 256), to_sdf = False, sdf_threshold = 10, transform = None):
-        self.root_dir = Path(root_dir)
-        self.target_size = target_size
+        self.dilate_mask = dilate_mask
         self.to_sdf = to_sdf
         self.sdf_threshold = sdf_threshold
         self.transform = transform
@@ -190,6 +98,10 @@ class FloodDataset(Dataset):
         # Arr is currently uint8 values, 0, 1, 2
         mask = np.where(arr == 2, 1, 0).astype(np.uint8)
         # mask = mask[None, :, :]  # 1, H, W
+
+        # Optionally dilate the mask to expand flood areas
+        if self.dilate_mask:
+            mask = binary_dilation(mask, structure = structure).astype(np.uint8)
 
         if self.to_sdf:
             mask = self.mask_to_sdf(mask, truncation_threshold = self.sdf_threshold)
@@ -294,7 +206,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[48]:
+# In[22]:
 
 
 # Define data directory
@@ -316,7 +228,7 @@ transform = v2.Compose([
     
 # Create dataset
 target_size = (256, 256)
-flood_dataset = FloodDataset(data_dir, target_size = target_size, to_sdf = True, sdf_threshold = 10, transform = transform)
+flood_dataset = FloodDataset(data_dir, target_size = target_size, dilate_mask = True, to_sdf = True, sdf_threshold = 2, transform = transform)
 
 # Define data loader
 flood_dataloader = DataLoader(
@@ -327,9 +239,35 @@ flood_dataloader = DataLoader(
 )
 
 
+# In[30]:
+
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+x1 = flood_dataset[475][0][0]
+binary_x1 = (x1 <= 0).float()
+eroded_x1 = binary_erosion(binary_x1.numpy(), structure = structure).astype(np.float32)
+fig, axs = plt.subplots(1, 3, figsize = (15, 5))
+axs[0].imshow(x1, vmin = -1, vmax = 1)
+axs[0].set_title("SDF Mask")
+axs[0].axis('off')
+axs[1].imshow(binary_x1)
+axs[1].set_title("Binary Mask")
+axs[1].axis('off')
+axs[2].imshow(eroded_x1)
+axs[2].set_title("Eroded Binary Mask")
+axs[2].axis('off')
+plt.show()
+
+
+# In[31]:
+
+
+flood_dataset[475][0][0].shape, flood_dataset[475][0][0].min(), flood_dataset[475][0][0].max()
+
+
 # ## Creating Sampleable datasets
 
-# In[49]:
+# In[32]:
 
 
 from abc import ABC, abstractmethod
@@ -356,7 +294,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[50]:
+# In[33]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -377,7 +315,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[51]:
+# In[34]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -463,7 +401,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[52]:
+# In[35]:
 
 
 ## Creating noise schedulers
@@ -587,7 +525,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[17]:
+# In[36]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -664,7 +602,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[18]:
+# In[37]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -757,7 +695,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[19]:
+# In[38]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -905,7 +843,7 @@ class Trainer(ABC):
 
 
 
-# In[20]:
+# In[39]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1076,7 +1014,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[32]:
+# In[41]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1093,7 +1031,7 @@ class flood_map_sampler(nn.Module, Sampleable):
         if num_samples > len(self.dataset):
             raise ValueError(f"Requested {num_samples} samples, but dataset only has {len(self.dataset)} samples.")
         
-        indices = [470]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
+        indices = [475]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
         # indices = torch.randperm(len(self.dataset))[:num_samples]
         samples = [self.dataset[i][0] for i in indices]
         
@@ -1124,7 +1062,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[55]:
+# In[42]:
 
 
 import matplotlib.pyplot as plt
@@ -1179,7 +1117,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[24]:
+# In[43]:
 
 
 plt.figure(figsize = (10, 10))
@@ -1199,7 +1137,7 @@ plt.tight_layout()
 # plt.savefig("flood_samples_sdf.png", dpi = 1000)
 
 
-# In[34]:
+# In[44]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1249,14 +1187,7 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[40]:
-
-
-a = torch.randn(10, 2, 2)
-a.mean(dim = (1, 2)).shape
-
-
-# In[35]:
+# In[45]:
 
 
 ## Create CFG trainer
@@ -1307,7 +1238,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[36]:
+# In[46]:
 
 
 import numpy as np
@@ -1546,7 +1477,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[37]:
+# In[47]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1617,7 +1548,7 @@ class FloodUNet(ConditionalVectorFieldCNN):
         return self.final_conv(x)
 
 
-# In[38]:
+# In[48]:
 
 
 ## Train unet 
@@ -1662,7 +1593,7 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
 # model.eval()
 
 
-# In[41]:
+# In[49]:
 
 
 ## Plot losses
@@ -1674,7 +1605,7 @@ plt.xlabel("Epoch")
 plt.show()
 
 
-# In[68]:
+# In[50]:
 
 
 ## Visualize the flow: noise → data trajectory
@@ -1729,19 +1660,13 @@ with torch.no_grad():
     plt.show()
 
 
-# In[64]:
+# In[51]:
 
 
 plt.imshow(trajectory[0, -1, 0].cpu().numpy(), vmin = -1, vmax = 1)
 
 
-# In[46]:
-
-
-trajectory.shape
-
-
-# In[44]:
+# In[52]:
 
 
 ## Create animated GIF of the flow (optional - requires imageio)
@@ -1784,7 +1709,7 @@ except ImportError:
     print("Install imageio for GIF animation: pip install imageio")
 
 
-# In[87]:
+# In[53]:
 
 
 # Put model in eval mode
@@ -1837,31 +1762,37 @@ with torch.no_grad():
 
 
 
-# In[102]:
+# In[67]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 #Plot generated samples
-fig, axs = plt.subplots(1, 2, figsize = (12, 6))
-axs[0].imshow(z[0, 0].cpu()<0, cmap = 'gray',)
+fig, axs = plt.subplots(1, 3, figsize = (12, 6))
+axs[0].imshow(z[0, 0].cpu()<0,)
 axs[0].set_title("Data sample z")
 axs[0].axis('off')
 
-axs[1].imshow(x1[0, 0].cpu() < 0.4, cmap = 'gray', )
+simulated = x1[0, 0].cpu() < 0.9
+axs[1].imshow(simulated, )
 axs[1].set_title("Simulated x at t=1")
 axs[1].axis('off')
 
+simulated_eroded = binary_erosion(simulated, structure = structure).astype(np.float32)
+axs[2].imshow(simulated_eroded, )
+axs[2].set_title("Eroded Simulated x")
+axs[2].axis('off')
 
-# In[93]:
+
+# In[56]:
 
 
 ## Histogram of x1 values
-plt.hist(x1.cpu().numpy().flatten(), bins = 20)
+plt.hist(x1.cpu().numpy().flatten(), bins = 2)
 plt.title("Histogram of x1 values at t=1")
 
 
-# In[103]:
+# In[68]:
 
 
 def generate_probability_map(model, simulator, z, month_labels, location_labels, num_samples = 100):
@@ -1904,13 +1835,20 @@ def generate_probability_map(model, simulator, z, month_labels, location_labels,
 prob_map, uncert_map = generate_probability_map(model = floodnet, simulator = simulator, z = z, month_labels = month_labels, location_labels = location_labels, num_samples = 20)
 
 
-# In[110]:
+# In[76]:
 
 
-plt.imshow(prob_map>0.2, cmap = 'viridis', vmin = 0, vmax = 1)
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.imshow(prob_map, cmap = 'viridis', vmin = 0, vmax = 1)
 
 
-# In[108]:
+# In[70]:
+
+
+prob_map.min(), prob_map.max()
+
+
+# In[72]:
 
 
 # --- Plotting ---
