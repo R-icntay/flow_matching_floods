@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[38]:
+# In[1]:
 
 
 import numpy as np
@@ -41,7 +41,7 @@ def imshow_normalized(tensor_img, mean = (0.5, ), std = (0.5, )):
     plt.axis('off')
 
 
-# In[39]:
+# In[2]:
 
 
 class FloodDataset(Dataset):
@@ -140,7 +140,7 @@ class FloodDataset(Dataset):
             # return None
 
 
-# In[40]:
+# In[3]:
 
 
 class FloodDataset(Dataset):
@@ -286,7 +286,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[68]:
+# In[4]:
 
 
 # Define data directory
@@ -300,7 +300,7 @@ transform = v2.Compose([
     v2.ToDtype(torch.float32, scale = False),
 
     # Apply random horizontal flip
-    # v2.RandomHorizontalFlip(p = 0.5),
+    v2.RandomHorizontalFlip(p = 0.5),
     # Apply normalization to center data around 0, this will scale values to [-1, 1]
     # v2.Normalize(mean = [0.5], std = [0.5])
 ])
@@ -321,7 +321,7 @@ flood_dataloader = DataLoader(
 
 # ## Creating Sampleable datasets
 
-# In[42]:
+# In[5]:
 
 
 from abc import ABC, abstractmethod
@@ -348,7 +348,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[43]:
+# In[6]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -369,7 +369,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[44]:
+# In[7]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -455,7 +455,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[45]:
+# In[8]:
 
 
 ## Creating noise schedulers
@@ -579,7 +579,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[46]:
+# In[9]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -656,7 +656,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[47]:
+# In[10]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -749,7 +749,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[ ]:
+# In[11]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -897,7 +897,7 @@ class Trainer(ABC):
 
 
 
-# In[49]:
+# In[12]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1068,7 +1068,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[50]:
+# In[13]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1085,7 +1085,8 @@ class flood_map_sampler(nn.Module, Sampleable):
         if num_samples > len(self.dataset):
             raise ValueError(f"Requested {num_samples} samples, but dataset only has {len(self.dataset)} samples.")
         
-        indices = [9]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
+        # indices = [9]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
+        indices = torch.randperm(len(self.dataset))[:num_samples]
         samples = [self.dataset[i][0] for i in indices]
         
         month_labels = [self.dataset[i][1] for i in indices]
@@ -1115,7 +1116,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[70]:
+# In[27]:
 
 
 import matplotlib.pyplot as plt
@@ -1170,7 +1171,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[16]:
+# In[28]:
 
 
 plt.figure(figsize = (10, 10))
@@ -1190,7 +1191,7 @@ plt.tight_layout()
 # plt.savefig("flood_samples_sdf.png", dpi = 1000)
 
 
-# In[17]:
+# In[29]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1240,7 +1241,7 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[ ]:
+# In[30]:
 
 
 ## Create CFG trainer
@@ -1291,7 +1292,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[19]:
+# In[31]:
 
 
 import numpy as np
@@ -1530,7 +1531,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[20]:
+# In[32]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1601,7 +1602,7 @@ class FloodUNet(ConditionalVectorFieldCNN):
         return self.final_conv(x)
 
 
-# In[ ]:
+# In[33]:
 
 
 ## Train unet 
@@ -1629,16 +1630,16 @@ floodnet = FloodUNet(
 trainer = CFGTrainer(
     path = path,
     model = floodnet,
-    eta = 0.0,  # No label dropping for initial training
+    eta = 0.1,  # No label dropping for initial training
     device = device,
     grad_clip_norm = 1.0
 )
 
 # Train model
-trainer.train(num_epochs = 1000, device = device, lr = 1e-4, warmup_epochs = 100, batch_size = 8)
+trainer.train(num_epochs = 5000, device = device, lr = 1e-4, warmup_epochs = 500, batch_size = 8)
 
 # Save model
-torch.save(floodnet.state_dict(), "floodnet_cfg_bin_not_norm.pth")
+torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
 
 # # Load
 # model = MyModel(...)               # create the model instance
@@ -1646,7 +1647,7 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_bin_not_norm.pth")
 # model.eval()
 
 
-# In[51]:
+# In[34]:
 
 
 ## Plot losses
@@ -1658,7 +1659,7 @@ plt.xlabel("Epoch")
 plt.show()
 
 
-# In[74]:
+# In[35]:
 
 
 ## Visualize the flow: noise → data trajectory
@@ -1756,7 +1757,7 @@ except ImportError:
     print("Install imageio for GIF animation: pip install imageio")
 
 
-# In[72]:
+# In[54]:
 
 
 # Put model in eval mode
@@ -1789,7 +1790,7 @@ with torch.no_grad():
     #Plot generated samples
     fig, axs = plt.subplots(1, 2, figsize = (12, 6))
     axs[0].imshow(z[0, 0].cpu(), cmap = 'gray',)
-    axs[0].set_title("Conditioning Variable z")
+    axs[0].set_title("Data sample z")
     axs[0].axis('off')
 
     axs[1].imshow(x1[0, 0].cpu(), cmap = 'gray', )
@@ -1803,7 +1804,7 @@ with torch.no_grad():
 
 
 
-# In[82]:
+# In[44]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
@@ -1814,27 +1815,23 @@ axs[0].imshow(z[0, 0].cpu(), cmap = 'gray',)
 axs[0].set_title("Data sample z")
 axs[0].axis('off')
 
-axs[1].imshow(x1[0, 0].cpu() < 0.2, cmap = 'gray', )
+axs[1].imshow(x1[0, 0].cpu() < 0.15, cmap = 'gray', )
 axs[1].set_title("Simulated x at t=1")
 axs[1].axis('off')
 
 
-# In[36]:
+# In[49]:
 
 
 ## Histogram of x1 values
-plt.hist(x1.cpu().numpy().flatten(), bins = 20)
+plt.hist(x1.cpu().numpy().flatten(), bins = 2)
 plt.title("Histogram of x1 values at t=1")
 
 
-# In[74]:
-
-
-x1.min(), x1.max()
-
-
-# In[35]:
-
-
-0.2-0.01
-
+# ## To do
+# 
+# - effect of sdf
+# - marginal prob path
+# - How to prevent/balance Overfit
+# - Effects of train/val
+# - How this varies to Reimanian manifolds
