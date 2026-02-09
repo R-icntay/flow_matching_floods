@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[24]:
+# In[1]:
 
 
 import numpy as np
@@ -53,7 +53,7 @@ def fmap_idx_finder(fmap_basename, flood_dataset):
     return fmaps.index(fmap_basename)
 
 
-# In[12]:
+# In[2]:
 
 
 structure = np.ones((3, 3))  # Or disk for rounder
@@ -206,7 +206,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[22]:
+# In[6]:
 
 
 # Define data directory
@@ -231,15 +231,22 @@ target_size = (256, 256)
 flood_dataset = FloodDataset(data_dir, target_size = target_size, dilate_mask = True, to_sdf = True, sdf_threshold = 2, transform = transform)
 
 # Define data loader
+def collate_fn(batch):
+    masks, months, metas = zip(*batch)
+    masks = torch.stack(masks, dim = 0).to(torch.float32) # [B, 1, H, W]
+    months = torch.tensor(months, dtype = torch.long) # [B]
+    metas = [meta["path"] for meta in metas]
+    return masks, months, metas
+
 flood_dataloader = DataLoader(
     dataset = flood_dataset,
     batch_size = BATCH_SIZE,
     shuffle = True,
-    num_workers = 4,
+    collate_fn = collate_fn
 )
 
 
-# In[30]:
+# In[7]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
@@ -259,15 +266,9 @@ axs[2].axis('off')
 plt.show()
 
 
-# In[31]:
-
-
-flood_dataset[475][0][0].shape, flood_dataset[475][0][0].min(), flood_dataset[475][0][0].max()
-
-
 # ## Creating Sampleable datasets
 
-# In[32]:
+# In[8]:
 
 
 from abc import ABC, abstractmethod
@@ -294,7 +295,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[33]:
+# In[9]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -315,7 +316,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[34]:
+# In[10]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -401,7 +402,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[35]:
+# In[11]:
 
 
 ## Creating noise schedulers
@@ -525,7 +526,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[36]:
+# In[12]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -602,7 +603,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[37]:
+# In[13]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -695,7 +696,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[38]:
+# In[14]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -769,6 +770,10 @@ class Trainer(ABC):
     def get_train_loss(self, **kwargs):
         pass
 
+    @abstractmethod
+    def get_train_loss_from_batch(self, batch, **kwargs):
+        pass
+
     def get_optimizer(self, lr):
         return torch.optim.Adam(self.model.parameters(), lr = lr)
 
@@ -800,7 +805,7 @@ class Trainer(ABC):
 
 
     
-    def train(self, num_epochs, device, lr = 1e-3, warmup_epochs = 100, **kwargs):
+    def train(self, num_epochs, dataloader, device, lr = 1e-3, warmup_epochs = 100, **kwargs):
         # Report model size
         size_b = model_size_b(self.model)
         print(f"Model size: {size_b / MiB:.3f} MiB")
@@ -811,31 +816,66 @@ class Trainer(ABC):
         optimizer = self.get_optimizer(lr)
         scheduler = self.get_polynomial_decay_schedule_with_warmup(optimizer, warmup_epochs, num_epochs)
 
-        pbar = tqdm(enumerate(range(num_epochs)))
-        for idx, epoch in pbar:
+        
 
-            # Zero out previous accumulated gradients
-            optimizer.zero_grad()
+        for epoch in range(num_epochs):
+            epoch_loss = 0.0
+            pbar = tqdm(dataloader)
 
-            # Forward pass and compute loss
-            loss = self.get_train_loss(**kwargs)
-            self.losses.append(loss.item())
+            for batch in pbar:
+                # Zero out previous accumulated gradients
+                optimizer.zero_grad()
 
-            # Gradient of loss wrt model parameters
-            loss.backward()
+                # Foward pass and compute loss
+                loss = self.get_train_loss_from_batch(batch, **kwargs)
+                epoch_loss += loss.item()
 
-            # Gradient clipping
-            if self.grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                # Gradient of loss wrt model parameters
+                loss.backward()
 
-            # Update model parameters
-            optimizer.step()
+                # Gradient clipping
+                if self.grad_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+
+                # Update model parameters
+                optimizer.step()
+
+            # Average loss for the epoch
+            epoch_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {epoch_loss:.4f}")
+            self.losses.append(epoch_loss)
 
             # Update learning rate after each epoch
             scheduler.step()
+
+
+
+
+        # pbar = tqdm(enumerate(range(num_epochs)))
+        # for idx, epoch in pbar:
+
+        #     # Zero out previous accumulated gradients
+        #     optimizer.zero_grad()
+
+        #     # Forward pass and compute loss
+        #     loss = self.get_train_loss(**kwargs)
+        #     self.losses.append(loss.item())
+
+        #     # Gradient of loss wrt model parameters
+        #     loss.backward()
+
+        #     # Gradient clipping
+        #     if self.grad_clip_norm is not None:
+        #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+
+        #     # Update model parameters
+        #     optimizer.step()
+
+        #     # Update learning rate after each epoch
+        #     scheduler.step()
             
 
-            pbar.set_description(f"Epoch {idx}, loss: {loss.item():.3f}")
+        #     pbar.set_description(f"Epoch {idx}, loss: {loss.item():.3f}")
 
         # Final mode to eval
         self.model.eval()
@@ -843,7 +883,7 @@ class Trainer(ABC):
 
 
 
-# In[39]:
+# In[15]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1014,7 +1054,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[41]:
+# In[16]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1031,8 +1071,8 @@ class flood_map_sampler(nn.Module, Sampleable):
         if num_samples > len(self.dataset):
             raise ValueError(f"Requested {num_samples} samples, but dataset only has {len(self.dataset)} samples.")
         
-        indices = [475]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
-        # indices = torch.randperm(len(self.dataset))[:num_samples]
+        # indices = [475]*num_samples #torch.randperm(len(self.dataset))[:num_samples] ** overfit 1 sample
+        indices = torch.randperm(len(self.dataset))[:num_samples]
         samples = [self.dataset[i][0] for i in indices]
         
         month_labels = [self.dataset[i][1] for i in indices]
@@ -1044,6 +1084,26 @@ class flood_map_sampler(nn.Module, Sampleable):
         month_labels = torch.tensor(month_labels, device = self.dummy.device) # B
         location_labels = torch.tensor(location_labels, device = self.dummy.device) # B
         return samples, month_labels, location_labels
+
+    def sample_at_idx(self, indices):
+        """
+        Sample a specific index from the dataset, used for visualization and debugging
+        """
+
+        samples = [self.dataset[i][0] for i in indices]
+        
+        month_labels = [self.dataset[i][1] for i in indices]
+        location_labels = [re.search(r'([A-Z]\d+[A-Z]\d+)', self.dataset[i][2]["path"]).group(1) for i in indices]
+        location_labels = [self.dataset.tile_to_int_map[loc] for loc in location_labels]
+
+
+        samples = torch.stack(samples, dim = 0).to(self.dummy)  # B, C, H, W
+        month_labels = torch.tensor(month_labels, device = self.dummy.device) # B
+        location_labels = torch.tensor(location_labels, device = self.dummy.device) # B
+        return samples, month_labels, location_labels
+        
+        
+        
 
 ## Pinit sampler
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -1062,7 +1122,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[42]:
+# In[21]:
 
 
 import matplotlib.pyplot as plt
@@ -1117,7 +1177,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[43]:
+# In[22]:
 
 
 plt.figure(figsize = (10, 10))
@@ -1137,7 +1197,7 @@ plt.tight_layout()
 # plt.savefig("flood_samples_sdf.png", dpi = 1000)
 
 
-# In[44]:
+# In[23]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1187,7 +1247,7 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[45]:
+# In[ ]:
 
 
 ## Create CFG trainer
@@ -1200,6 +1260,56 @@ class CFGTrainer(Trainer):
         self.eta = eta
         self.path = path
         self.device = device
+
+    def get_train_loss_from_batch(self, batch, **kwargs):
+        # Unpack batch
+        z = batch[0].to(self.device)  # [B, C, H, W]
+        batch_size = z.shape[0]
+
+        month_labels = batch[1].to(self.device) # [B]
+        location_labels = batch[2]
+        location_labels = [re.search(r'([A-Z]\d+[A-Z]\d+)', path).group(1) for path in location_labels]
+        location_labels = [self.path.p_data.dataset.tile_to_int_map[loc] for loc in location_labels]
+        location_labels = torch.tensor(location_labels, device = self.device, dtype = torch.long) # [B]
+       
+
+        
+
+      
+        # Sample time from a uniform distribution
+        # t ~ uniform(0, 1-eps) to avoid singularity at t=1
+        t_max = 0.999  # Avoid t=1 where vector field becomes singular
+        t = torch.rand(batch_size, 1, 1, 1, device = self.device) * t_max  # [B, 1, 1, 1]
+
+        # Randomly drop labels with probability eta
+        drop_mask = torch.rand(batch_size, device = month_labels.device) < self.eta  # [B]
+        month_labels = month_labels.masked_fill(drop_mask, 12) # Where month label 12 indicates no guidance
+        location_labels = location_labels.masked_fill(drop_mask, len(self.path.p_data.dataset.tile_to_int_map)) # Where location label len(...) indicates no guidance           
+        y = torch.stack([month_labels, location_labels], dim = 0)  # [2, B]
+
+        # Sample from the conditional probability path
+        # x_t ~ p_t(.|z) x = alpha_t * z + beta_t * noise
+        x_t = self.path.sample_conditional_path(z, t)  # [B, C, H, W]
+
+        # Compute the conditional vector field
+        # u_t(x|z) = (z - x) / (1 - t) for optimal transport path
+        ut_ref = self.path.conditional_vector_field(x_t, z, t)  # [B, C, H, W]
+
+        # Compute the model predicted vector field u_t^theta(x, y)
+        ut_theta = self.model(x_t, t, y) # [B, C, H, W]
+
+        # Compute MSE loss between reference and model predicted vector fields
+        error = torch.square(ut_theta - ut_ref)  # [B, C, H, W]
+        loss = torch.mean(error)  # scalar (average over all pixels and batch)
+        return loss
+
+
+
+
+
+
+
+        
 
     def get_train_loss(self, batch_size):
         # Sample time from a uniform distribution
@@ -1238,7 +1348,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[46]:
+# In[25]:
 
 
 import numpy as np
@@ -1477,7 +1587,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[47]:
+# In[26]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1548,7 +1658,7 @@ class FloodUNet(ConditionalVectorFieldCNN):
         return self.final_conv(x)
 
 
-# In[48]:
+# In[29]:
 
 
 ## Train unet 
@@ -1576,7 +1686,7 @@ floodnet = FloodUNet(
 trainer = CFGTrainer(
     path = path,
     model = floodnet,
-    eta = 0.0,  # No label dropping for initial training
+    eta = 0.1,  # No label dropping for initial training
     device = device,
     grad_clip_norm = 1.0
 )
@@ -1593,7 +1703,7 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
 # model.eval()
 
 
-# In[49]:
+# In[30]:
 
 
 ## Plot losses
@@ -1709,14 +1819,14 @@ except ImportError:
     print("Install imageio for GIF animation: pip install imageio")
 
 
-# In[53]:
+# In[64]:
 
 
 # Put model in eval mode
 floodnet.eval()
 with torch.no_grad():
     # Setup ode and simulator
-    ode = CFGVectorFieldODE(net = floodnet, guidance_scale = 1.0)
+    ode = CFGVectorFieldODE(net = floodnet, guidance_scale = 1)
     simulator = EulerSimulator(ode = ode)
     # Sample from p_simple
     num_samples = 1
@@ -1725,6 +1835,7 @@ with torch.no_grad():
 
     # Sample conditioning variable z and labels y from p_data
     z, month_labels, location_labels = path.sample_conditioning_variable(num_samples)
+    # z, month_labels, location_labels = path.p_data.sample_at_idx([475])
     z = z.to(device)
     month_labels = month_labels.to(device)
     location_labels = location_labels.to(device)
@@ -1762,7 +1873,13 @@ with torch.no_grad():
 
 
 
-# In[67]:
+# In[51]:
+
+
+len(flood_dataset)
+
+
+# In[43]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
