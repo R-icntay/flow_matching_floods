@@ -3,7 +3,7 @@
 Flow-matching experiments for conditional flood-map generation using PyTorch.
 
 This repository is centered around
-`/home/runner/work/flow_matching_floods/flow_matching_floods/simple_flood_simulator_debug.py`,
+`simple_flood_simulator_debug.py`,
 which contains a notebook-style, end-to-end pipeline for:
 
 - loading monthly GeoTIFF flood maps,
@@ -14,11 +14,11 @@ which contains a notebook-style, end-to-end pipeline for:
 
 ## Repository contents
 
-- `/home/runner/work/flow_matching_floods/flow_matching_floods/simple_flood_simulator_debug.py`  
+- `simple_flood_simulator_debug.py`  
   Main reference implementation (notebook-export style script).
-- `/home/runner/work/flow_matching_floods/flow_matching_floods/simple_flood_simulator.ipynb`  
+- `simple_flood_simulator.ipynb`  
   Notebook variant.
-- `/home/runner/work/flow_matching_floods/flow_matching_floods/creating_flood_maps.ipynb`  
+- `creating_flood_maps.ipynb`  
   Additional data/map creation notebook.
 
 ## Data format expected by the simulator
