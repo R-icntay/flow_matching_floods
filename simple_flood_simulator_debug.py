@@ -3,7 +3,7 @@
 
 # ## In this notebook, we create a simple month conditioned flood diffusion model
 
-# In[1]:
+# In[38]:
 
 
 import numpy as np
@@ -53,7 +53,7 @@ def fmap_idx_finder(fmap_basename, flood_dataset):
     return fmaps.index(fmap_basename)
 
 
-# In[2]:
+# In[39]:
 
 
 structure = np.ones((3, 3))  # Or disk for rounder
@@ -206,7 +206,7 @@ class FloodDataset(Dataset):
         return binary_mask
 
 
-# In[6]:
+# In[40]:
 
 
 # Define data directory
@@ -246,7 +246,7 @@ flood_dataloader = DataLoader(
 )
 
 
-# In[7]:
+# In[41]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
@@ -268,7 +268,7 @@ plt.show()
 
 # ## Creating Sampleable datasets
 
-# In[8]:
+# In[42]:
 
 
 from abc import ABC, abstractmethod
@@ -295,7 +295,7 @@ class Sampleable(ABC):
 
 # Next we create a sampleable dataset for Gaussian, which is the initial distribution $P_{init}$ which we aim to transform into the flood distribution $P_{flood}$ using our flow matching model.
 
-# In[9]:
+# In[43]:
 
 
 class IsotropicGaussian(nn.Module, Sampleable):
@@ -316,7 +316,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
 
 # Next we create create conditional probability paths where we will sample both the data and label.
 
-# In[10]:
+# In[44]:
 
 
 class ConditionalProbabilityPath(nn.Module, ABC):
@@ -402,7 +402,7 @@ class ConditionalProbabilityPath(nn.Module, ABC):
         pass
 
 
-# In[11]:
+# In[45]:
 
 
 ## Creating noise schedulers
@@ -526,7 +526,7 @@ class LinearBeta(Beta):
         return torch.ones_like(t) * -1.0
 
 
-# In[12]:
+# In[46]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -603,7 +603,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[13]:
+# In[47]:
 
 
 ## Update ODE, SDE and simulator classes
@@ -696,7 +696,7 @@ class Simulator(ABC):
         return torch.stack(xs, dim = 1) # [B, nts, C, H, W]
 
 
-# In[14]:
+# In[48]:
 
 
 # Implement Euler and Euler-Maruyama simulators
@@ -883,7 +883,7 @@ class Trainer(ABC):
 
 
 
-# In[15]:
+# In[49]:
 
 
 ## Instantiate Gaussian Conditional Probability Path
@@ -1054,7 +1054,7 @@ class GaussianConditionalProbabilityPath(ConditionalProbabilityPath):
 
 
 
-# In[16]:
+# In[50]:
 
 
 ## Create sampleable wrapper for flood map dataset
@@ -1122,7 +1122,7 @@ class IsotropicGaussian(nn.Module, Sampleable):
         return samples.to(self.dummy.device), None # [B, C, H, W], None
 
 
-# In[21]:
+# In[51]:
 
 
 import matplotlib.pyplot as plt
@@ -1177,7 +1177,7 @@ for tidx, t in enumerate(ts):
 # plt.show()
 
 
-# In[22]:
+# In[52]:
 
 
 plt.figure(figsize = (10, 10))
@@ -1197,7 +1197,7 @@ plt.tight_layout()
 # plt.savefig("flood_samples_sdf.png", dpi = 1000)
 
 
-# In[23]:
+# In[53]:
 
 
 ## Define conditional vector field as a CNN for now
@@ -1247,7 +1247,7 @@ class CFGVectorFieldODE(ODE):
         return combined_vector_field
 
 
-# In[ ]:
+# In[54]:
 
 
 ## Create CFG trainer
@@ -1348,7 +1348,7 @@ class CFGTrainer(Trainer):
 # ## Unet vector field model
 # Next we create a Unet model to be used as the vector field model for flow matching. The Unet will take in both the noisy flood data and the month label & location as input and output the vector field needed for flow matching.
 
-# In[25]:
+# In[55]:
 
 
 import numpy as np
@@ -1587,7 +1587,7 @@ class ConditionEmbedding(nn.Module):
 
 
 
-# In[26]:
+# In[56]:
 
 
 from typing import Optional, List, Type, Tuple, Dict
@@ -1658,7 +1658,7 @@ class FloodUNet(ConditionalVectorFieldCNN):
         return self.final_conv(x)
 
 
-# In[29]:
+# In[ ]:
 
 
 ## Train unet 
@@ -1686,16 +1686,16 @@ floodnet = FloodUNet(
 trainer = CFGTrainer(
     path = path,
     model = floodnet,
-    eta = 0.1,  # No label dropping for initial training
+    eta = 0.1,  # Drop labels with 10% probability for robustness
     device = device,
     grad_clip_norm = 1.0
 )
 
 # Train model
-trainer.train(num_epochs = 1000, device = device, lr = 1e-4, warmup_epochs = 100, batch_size = 8)
+trainer.train(num_epochs = 300, dataloader = flood_dataloader, device = device, lr = 1e-4, warmup_epochs = 100, batch_size = 8)
 
 # Save model
-torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
+torch.save(floodnet.state_dict(), "full_train_floodnet_cfg_sdf.pth")
 
 # # Load
 # model = MyModel(...)               # create the model instance
@@ -1703,7 +1703,13 @@ torch.save(floodnet.state_dict(), "floodnet_cfg_sdf.pth")
 # model.eval()
 
 
-# In[30]:
+# In[ ]:
+
+
+
+
+
+# In[62]:
 
 
 ## Plot losses
@@ -1715,7 +1721,7 @@ plt.xlabel("Epoch")
 plt.show()
 
 
-# In[50]:
+# In[66]:
 
 
 ## Visualize the flow: noise → data trajectory
@@ -1819,14 +1825,14 @@ except ImportError:
     print("Install imageio for GIF animation: pip install imageio")
 
 
-# In[64]:
+# In[124]:
 
 
 # Put model in eval mode
 floodnet.eval()
 with torch.no_grad():
     # Setup ode and simulator
-    ode = CFGVectorFieldODE(net = floodnet, guidance_scale = 1)
+    ode = CFGVectorFieldODE(net = floodnet, guidance_scale = 7.5)  # Increase guidance scale for stronger conditioning
     simulator = EulerSimulator(ode = ode)
     # Sample from p_simple
     num_samples = 1
@@ -1834,8 +1840,8 @@ with torch.no_grad():
     x0 = x0.to(device)
 
     # Sample conditioning variable z and labels y from p_data
-    z, month_labels, location_labels = path.sample_conditioning_variable(num_samples)
-    # z, month_labels, location_labels = path.p_data.sample_at_idx([475])
+    # z, month_labels, location_labels = path.sample_conditioning_variable(num_samples)
+    z, month_labels, location_labels = path.p_data.sample_at_idx([5])
     z = z.to(device)
     month_labels = month_labels.to(device)
     location_labels = location_labels.to(device)
