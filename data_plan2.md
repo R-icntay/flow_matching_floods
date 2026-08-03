@@ -1,0 +1,39 @@
+## Plan: Split and Loader Design
+
+Build the dataset at the Sentinel-1 acquisition-date level, not the current monthly level. Use each sample as one `(tile, date)` pair with a date-aligned flood target and a fixed multichannel conditioning stack. Split on both whole tiles and chronological event groups so validation and test measure both geographic and temporal generalization without leakage. Feed the stock U-Net through spatial conditioning via `concat_conditioning`, and keep month/tile metadata only as optional auxiliary labels.
+
+**Steps**
+1. Define the canonical sample unit as one `(tile_name, acquisition_date)` row. Reuse the flood-date CSV discovery in `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\data_download.ipynb` and replace the current monthly target generation in `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\creating_flood_maps.ipynb` with a date-aligned rasterization pass that outputs one flood mask per detected Sentinel-1 date. This blocks all later steps.
+2. Build a manifest table with one row per sample and columns for `tile_name`, `acquisition_date`, `year`, `month`, `event_id`, `target_path`, every static-layer path, every dynamic-layer path, missing-data flags, `split`, `eval_group`, and `flood_pixel_count`. Populate the dynamic path columns using the export naming controlled by `schedule_exports_for_tile` in `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\data_download.ipynb`. This blocks split generation and the data loader.
+3. Add event grouping before splitting. Within each tile, sort acquisition dates and collapse consecutive detections into `event_id`s using a 14-day gap threshold, then store event start and end dates in the manifest. This prevents prolonged floods from appearing across multiple partitions. This blocks final split assignment.
+4. Assign spatial holdouts at tile level. With the current Kenya footprint, use an 8/2/2 tile split if the tile count remains 12, stratified by event count and flood-pixel volume so both holdout sets contain wet and dry regimes. If the tile count changes, keep roughly 65–70% train, 15–20% validation, and 15–20% test. This can run in parallel with step 5 once the manifest exists.
+5. Assign temporal holdouts only within train tiles, using event order rather than raw dates: first 70% of events to `train_temporal`, next 15% to `val_temporal`, final 15% to `test_temporal`. Insert a 14-day purge gap between adjacent buckets so rolling 7/14-day windows and repeat observations of the same event do not leak across boundaries. This can run in parallel with step 4.
+6. Compose the final partitions and keep an explicit evaluation tag. Recommended rule: `train = train tiles x train_temporal`; `val = train tiles x val_temporal` plus all rows from validation tiles; `test = train tiles x test_temporal` plus all rows from test tiles. Add `eval_group` with values like `temporal_seen_tiles` and `spatial_unseen_tiles` so the two generalization modes are scored separately.
+7. Define the canonical target grid for the loader. Use the flood target raster as the template grid and align every conditioning raster to that grid either on the fly or in an offline cache. Use bilinear or average resampling for continuous layers and nearest-neighbor for categorical layers such as ESA WorldCover. Keep the current 256 x 256 training size used by the existing simulator unless the memory budget changes.
+8. Define a new dataset contract that returns dictionaries rather than the current tuple from `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\simple_flood_simulator_debug.py`. Each item should expose `target`, `conditioning`, `month_idx`, `tile_idx`, `date`, `event_id`, `tile_name`, and `split`, with optional derived channels such as soil-moisture anomaly and precipitation intensity from `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\data_plan.md`.
+9. Target the stock U-Net conditioning path rather than the current custom month/tile-only model. Wire the stacked conditioning tensor into `extra["concat_conditioning"]` in `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\models\unet.py`, and stop reconstructing tile ids from file paths inside `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\simple_flood_simulator_debug.py`. If you still want month or tile embeddings, pass them explicitly from the loader rather than deriving them from filenames.
+10. Start with manifest-driven on-the-fly reads for correctness, then switch to prewarped sample tensors or chunked storage only if profiling shows raster I/O dominates training time. This depends on the first end-to-end pass.
+11. Verify the split and loader before any long training run: confirm that no tile in validation or test appears in training, no `event_id` spans multiple splits, 14-day lookback windows never cross split boundaries for temporal samples, loaded samples have correct channel alignment and normalization, and a single forward pass works with shapes `[B, 1, H, W]` for targets and `[B, C, H, W]` for conditioning.
+
+**Relevant files**
+- `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\data_download.ipynb` — exported conditioning variables, flood-date CSV discovery, and sample-level dynamic feature definitions.
+- `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\creating_flood_maps.ipynb` — existing rasterization logic to reuse when converting monthly targets into acquisition-date targets.
+- `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\simple_flood_simulator_debug.py` — current `FloodDataset`, `collate_fn`, and trainer batch contract that must change from tuple outputs and filename-derived labels.
+- `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\models\unet.py` — stock model path already supports `concat_conditioning` for multichannel spatial covariates.
+- `c:\Users\homeuser\Documents\deep_learning_fundamentals\flow_matching_floods\data_plan.md` — feature priority, derived-feature candidates, and window rationale.
+
+**Verification**
+1. Materialize the manifest and print split counts by tile, year, and `event_id`.
+2. Confirm zero overlap in tile names and `event_id`s across splits and a zero count of temporal samples whose lookback window touches another split.
+3. Load one batch from each split and verify fixed channel order, dtypes, per-channel normalization, and nearest-neighbor handling for categorical layers.
+4. Run a one-batch forward pass through the chosen U-Net interface using `concat_conditioning` and confirm the trainer no longer depends on parsing tile ids from file paths.
+5. Track validation metrics separately for `temporal_seen_tiles` and `spatial_unseen_tiles`; do not collapse them into a single score until both are stable.
+
+**Decisions**
+- Included: date-aligned targets per Sentinel-1 acquisition, mixed spatial plus temporal evaluation, and the stock U-Net concat-conditioning path.
+- Excluded: monthly targets, random pixel-level splitting, and any split that lets the same hydrologic event appear in more than one partition.
+- Assumption: flood detections within 14 days in the same tile are likely the same event unless a better event definition is added later.
+
+**Further Considerations**
+1. If the Kenya tile count is too small for a stable single 8/2/2 split, switch to repeated spatial folds while keeping the same temporal logic inside each fold.
+2. If training becomes I/O bound, precompute aligned sample tensors only after the manifest is validated end to end.
