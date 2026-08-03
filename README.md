@@ -2,6 +2,15 @@
 
 Flow-matching experiments for conditional flood-map generation using PyTorch.
 
+## Demo
+
+![Flow-matching sampling trajectory: noise transformed into a flood map](flood_flows.gif)
+
+The animation shows the learned vector field transporting Gaussian noise into a
+flood map over the flow-matching time `t = 0 → 1`. The top row captures snapshots
+of the trajectory next to the ground-truth flood extent, while the main panel
+animates the full transformation as flood channels emerge from noise.
+
 This repository is centered around
 `simple_flood_simulator_debug.py`,
 which contains a notebook-style, end-to-end pipeline for:
